@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+"""
+reference_counter.py
+
+Counts the most frequent references (CFR/HTSUS/GRI/GN/ACE BRPD/etc.) from messy CBLE key text.
+
+Usage:
+  python reference_counter.py citations.txt
+  type citations.txt | python reference_counter.py
+  python reference_counter.py --top 100 --htsus-rollup 6 citations.txt
+"""
+
+import re
+import sys
+import argparse
+from collections import Counter, defaultdict
+
+RAW_TEXT = r"""
+CFR XYZ - 5 CFR XYZ -1" Reference Citations 1 Answer A 19 CFR 111.37; 19 CFR 111.34; 19 CFR 111.33; 19 CFR 111.38 2 Answer D 19 CFR 111.45(a) 3 Answer D 19 CFR 171.2(b) 4 Answer B 19 CFR 161.5 5 Answer D 19 CFR 111.102(d)(1)(i)-(vi) 6 Answer A 19 CFR 111.101; 19 CFR 111.30(d) 7 Answer A 19 CFR 111.52; 19 CFR 111.11(c); 19 CFR 111.19; 19 CFR 111.45 8 Answer C 19 CFR 111.19(b)(8) 9 10 Answer D 19 CFR 174.3(a) Answer D 19 CFR 141.46; 19 CFR 10.100 11 12 Answer C 19 CFR 163.2(a)(1)(i)-(ii); 19 CFR 163.2(e) Answer C 19 CFR 111.23(b) 13 14 All examinees granted credit Answer D 19 CFR 111.31(c) 15 16 Answer A 19 CFR 111.1 Answer B 19 CFR 111.102(d)(1); 19 CFR 163.4(a) 17 18 Answer C 19 CFR 111.102(d)(2) Answer C 19 CFR 111.104 19 20 Answer D 19 CFR 111.2(a)(2); 19 CFR 111.4 Answer A 19 CFR 111.36(a) 21 22 Answer A 19 CFR 152.103(a)(1); 19 CFR 152.103(i) Answer C 19 CFR 18.1(c) 23 24 Answer B 19 CFR 152.103(a)(1); 19 CFR 152.103(a)(4) Answer B 9903.88.15 HTSUS; 19 CFR 24.23; 19 CFR 24.24 25 26 Answer C 19 CFR 18.6(f); 19 CFR 18.8(d)(1)(i); 19 CFR 158.3; 19 CFR 159.7 Answer D 19 CFR 132.5(a) and (c) 27 28 Answer C ACE BRPD Section 7.14; 19 CFR 141.67 Answer D 19 CFR 132.14(a)(4)(i)(C) 29 30 Answer B 19 CFR 132.11a Answer C 19 CFR 132.13(a)(1)(i) 31 Answer D Chapter 31, Note 5 HTSUS; 3105.30.0000 HTSUS 32 Answer A GRI 1; Chapter 54, Note 1 HTSUS; Chapter 59, Note 1 HTSUS; Chapter 60, Note 1(c) HTSUS 33 Answer A 7326.90.1000 HTSUS 34 Answer A 8475.29.0000 HTSUS; GRI 2(a); 19 CFR 141.58; 19 CFR 142.21(h) 35 Answer B Note 1(a) to Chapter 17, HTSUS; Note 2 to Chapter 18, HTSUS; Note 3 to Chapter 19, HTSUS 36 Answer D GRI 1 and 2(a); Additional U.S. Rules of Interpretation 1(c); General Statistical Note 1 37 Answer A 8703.80.0045 HTSUS 38 Answer A General Note 3(b); 9503.00.0090 HTSUS; 9903.88.16 HTSUS; 9817.95.01 HTSUS; Chapter 99, Subchapter III, U.S. Note 20(u)(i) 39 Answer B 8516.60.4070 HTSUS; Chapter 85, Additional U.S. Note 2 40 Answer C Additional U.S. Rules of Interpretation 1 41 Answer B 19 CFR 174.12(e)(1) 42 Answer A 19 CFR 12.95 - 12.98 43 Answer D 19 CFR 12.39, 19 CFR 113.62; 19 CFR 113.74 44 Answer C 19 CFR 142.15 45 Answer D 19 CFR 113.27(b) 46 Answer D 19 CFR 113.23 47 Answer D 19 CFR 146.43 48 Answer B 19 CFR 146.31 49 Answer B 19 CFR 127.4 50 Answer A 19 CFR 161.2(a); 19 CFR 118.4; 19 CFR 141.11(a)(3); 19 CFR 141.15(c) 51 Answer A 19 CFR 12.73(e) 52 Answer B 19 CFR 141.89(a) 53 Answer B 19 CFR 159.11(a); 19 CFR 144.5 54 Answer B 19 CFR 101.1 55 Answer A 19 CFR 141.11(a) 56 Answer B and Answer D 19 CFR 10.41a; 19 CFR 4.2(a); 19 CFR 4.0(a) 57 Answer D 19 CFR 141.1(b)(1) 58 Answer A 19 CFR 177.9(a)-(c); 19 CFR 159.12(a)(2); 19 CFR 177.12(a) 59 Answer B 19 CFR 133.27(a) 60 Answer B 19 CFR 148.74(a)(1); 19 CFR 10.1(a)(1); 19 CFR 148.13(b); 9805.00.50 HTSUS 61 Answer A 19 CFR 114.1(d); 19 CFR 114.3(a); 19 CFR 114.23(a) 62 Answer C 19 CFR 102.12(b) 63 Answer A 19 CFR 190.2; 19 CFR 190.32(d) 64 Answer B Ace Entry Summary Instructions v. 2.4, p. 16 - 17 65 Answer C 19 CFR 142.17(a) 66 Answer D 19 CFR 152.103(e)(1) 67 Answer D 19 CFR 141.86(a)(6); 19 CFR 152.101(b) 68 Answer C 0709.54.0000 HTSUS 69 Answer A 19 CFR 152.103(j); 19 CFR 152.103(k) 70 Answer D 19 CFR 152.103(a)(2) 71 Answer D 19 CFR 151.101(b)(4) 72 Answer C 19 CFR 152.103(b)(1); 19 CFR 152.102(f) 73 All examinees granted credit 74 Answer B 9817.85.01, HTSUS 75 Answer D 19 CFR 10.3016(c) 76 Answer C 2009.12.4500 HTSUS; 19 CFR 10.770(c); 19 CFR 10.195(a)(2)(i)(D); 19 CFR 10.195(a)(2)(i)(E); 19 CFR 10.195(a)(2)(i)(F); 19 CFR 134.1(b); GN 27(h)/20.5 77 Answer D 19 CFR Part 182, Appendix A, Part II, Section 5(7) 78 Answer B and Answer D GN 11(B)(iii); GN 11(o)/85.19(A); 8507.90 HTSUS 79 Answer D 19 CFR 165.11(b) 80 Answer C 19 CFR 159.41; 19 CFR 159.47 Answer Reference Citations 1 Answer A 19 CFR 111.24 2 Answer B 19 CFR 163.2(a); 19 CFR 163.3 3 Answer B 19 CFR 141.39(b) 4 Answer C 19 CFR 141.31(d); 19 CFR 141.37; 19 CFR 101.1 5 Answer D 19 CFR 111.11(a); 19 CFR 111.16(b) 6 Answer A 19 CFR 111.1 7 Answer C 19 CFR 111.28(b); 19 CFR 111.30 8 Answer D 19 CFR 111.21(b) 9 Answer C 19 CFR 171, Appendix C, VII(C) 10 Answer B 19 CFR 134.54(b); 19 CFR 172.2; 19 CFR 172.1 11 Answer D 19 CFR 172.22(a) 12 Answer C 19 CFR 111.29(a) 13 Answer D 19 CFR 101.1; 19 CFR 111.3(a); 19 CFR 111.3(b) 14 Answer A 19 CFR 111.1; 19 CFR 111.2; 19 CFR 111.11; 19 CFR 142.3a; 19 CFR 143.1; 19 CFR Part 141, Subpart C 15 Answer B 19 CFR 111.36 16 Answer C HTSUS Chapter 64, Note 3(b); HTSUS 4113.30 17 Answer D HTSUS 9813.00.20 18 Answer B 19 CFR 12.26 - 12.32 19 Answer C ACE Entry Summary Instructions, version 2.4a; 2024 HTSUS Annex C 20 Answer B HTSUS 6403.51.3071, HTSUS Chapter 42, Note 2(d); HTSUS Chapter 64, Additional U.S. Note 1(a) 21 Answer A 19 CFR 190.92(e)(1)(i)-(iii) 22 Answer B 19 CFR 141.0a(f); 19 CFR 190.2; 19 CFR 190.6(a)-(b) 23 Answer C 19 CFR 190.7; 19 CFR 190.7(e); 19 CFR 190.8(h); 19 CFR 190.8(g)(2)(i)(C); 19 CFR 190.13 24 Answer D 19 CFR 190.72; 19 CFR 190.74 25 Answer D 19 CFR 190.35; 19 CFR 190.36 26 Answer C GRI 1; GRI 2(a); GRI 6; HTSUS Section XVI, Note 4; HTSUS 8438.20.0000 27 Answer B HTSUS 4602.90.0000 28 Answer A HTSUS Chapter 2, Additional U.S. Note 3 29 Answer D GRI 1; GRI 6; HTSUS 2712.20.0000 30 Answer B HTSUS 0301.92.0000 31 Answer D HTSUS Chapter 62, Additional U.S. Note 2 32 Answer C HTSUS Chapter 30, Note 4(c) 33 Answer A HTSUS Chapter 69, Additional U.S. Note 5(b); HTSUS Chapter 69, Additional U.S. Note 6(a); HTSUS Chapter 69, Additional U.S. Note 6(b); HTSUS 6911.10.2500 34 Answer D GRI 1; HTSUS Chapter 72, Note 1(e); HTSUS Chapter 72, Note 1(f); HTSUS Chapter 72, Note 1(k); HTSUS 7219.13.0002 35 Answer C GRI 1; GRI 6; HTSUS 8701.22.0015; HTSUS 8716.20.0000 36 Answer B HTSUS Chapter 68, Additional U.S. Note 2; HTSUS 6810.19.1400 37 Answer D GRI 1; GRI 6 38 Answer B HTSUS Chapter 44, Note 1(d); HTSUS 3802.10.0020 39 Answer B HTSUS 8543.30.9080 40 Answer D GRI 1; GRI 6; HTSUS Chapter 39, Note 2(y); HTSUS 9506.99.2580 41 Answer A 19 CFR 113.13(c) 42 Answer D ACE Business Rules and Process Document v. 12 Section 3.3 43 Answer A 19 CFR 134.41 44 Answer D 19 CFR 18.1 45 Answer C 19 CFR 159.6(c) 46 Answer A 19 CFR 145.31 47 Answer C 19 CFR 12.48 48 Answer A 19 CFR 159.12(a) 49 Answer A 19 CFR 141.0a(b) 50 Answer A HTSUS General Note 3(b); HTSUS Chapter 99, Subchapter III, U.S. Note 19(a)(iii); HTSUS Chapter 99, Subchapter III, U.S. Note 20(u)(i), HTSUS 9503.00.00; HTSUS 9903.88.16; HTSUS 9903.85.68 51 Answer B HTSUS, General Statistical Notes, Note 1(b)(i) 52 Answer A 19 CFR 142.17 53 Answer B 19 CFR 24.25; 19 CFR 24.25(e); ACE Business Rules and Process Document Section 19.4 54 Answer C 19 CFR 141.4(b) 55 Answer C & Answer D 19 CFR 146.7(b) 56 Answer C 19 CFR 146.40 57 Answer D 19 CFR 133.21(b)(2)(ii) 58 Answer B 19 CFR 134.2 59 Answer A 19 CFR 134.43(e) 60 Answer D 19 CFR 134.2 61 Answer A 19 CFR 10.53(e); 19 CFR 12.26(g)(2) 62 Answer B 19 CFR 12.7(a) 63 Answer B 19 CFR 19.12(d)(4)(ii) 64 Answer B 19 CFR 19.4(b)(8)(i) 65 Answer D 19 CFR 19.6(b)(2) 66 Answer B 19 CFR 132.17(a) 67 Answer D 19 CFR 132.1(f) 68 Answer A 19 CFR 132.5(a); 19 CFR 132.5(c); 19 CFR 19.1(a) 69 Answer B 19 CFR 182.14(b) 70 Answer C HTSUS General Note 7(a); HTSUS General Note 7(d)(ii); HTSUS Chapter 17, Additional U.S. Note 4; HTSUS Chapter 17 Additional U.S. Note 5; HTSUS 2106.90.4400 71 Answer D HTSUS General Note 3(f)(i) 72 Answer B HTSUS 1003.10.0000 73 Answer D 19 CFR 152.106(a)(4) 74 Answer D HTSUS 9801.00.20; 9801.00.25; 9802.00.50; 19 CFR 10.108 75 Answer D 19 CFR 152.102(a) 76 Answer C 19 CFR 145.35; 19 CFR 10.31; 19 CFR 10.49; 19 CFR 10.102 77 Answer C 19 CFR 159.32 78 Answer A 19 CFR 165.1 79 Answer D 19 CFR 165.1; 19 CFR 165.0 80 Answer C 19 CFR 351.402(f)(2)(i); 19 CFR 351.402(f)(2)(iii) Answer A 19 CFR 111.2(b) 2 Answer D 19 CFR 111.28(a); 19 CFR 111.1 3 Answer A 19 CFR 111.32; 19 CFR 111.53 4 Answer C 19 CFR 111.30 (d) 5 Answer A 19 CFR 111.19(b)(8) 6 Answer C 19 CFR 111.23 7 Answer A 19 CFR 163.7(a) 8 Answer D 19 CFR 111.30(e)(3) 9 Answer C Right to Make Entry, Directive 3530-002A, Section 5.3; 19 CFR 111.1; 19 CFR 111.2; 19 CFR 141.0a 10 Answer A Answer C 19 CFR 141.39(a)(2); 19 CFR 111.36(c)(3); 19 CFR 131.34 11 19 CFR 141.34; 19 CFR 141.31(a) Answer C 12 19 CFR Part 171, Appendix C II. E(5), II F, II G Answer A 13 19 CFR 171.2(e) Answer A 14 19 CFR 162.23(a) Answer B 15 19 CFR Part 171 Appendix C XII Answer D 16 19 CFR 111.29; 19 CFR 141.36; 19 CFR 141.38 Answer D 17 ACE Business Rules and Process Document (BRPD) Chapter 23, Section 23.2; 19 CFR 24.5 18 Answer B ACE BRPD Chapter 6, Section 6.5; ACE BRPD Chapter 10; 19 CFR 182.31; 19 CFR 174.11 19 Answer B Answer D ACE BRPD, Chapter 1, Section 1.4 20 19 CFR 144.37; ACE BRPD Chapter 12 Answer C 21 19 CFR 190.28 Answer C 22 19 CFR 190.15 Answer C 23 ACE BRPD Chapter 13, Section 13.02 Answer A 24 19 CFR 190.10(c); 19 CFR 190.2 Answer B 25 19 CFR 190.2 Answer D 26 HTSUS 9620.00.5000; General Rules of Interpretation (GRI) 1 and 6 Answer B 27 GRI 3(b) Answer C 28 HTSUS 6702.90.1000; GRI 1, 3(b), and 6 Answer B 29 HTSUS 6213.90.1000; Chapter 62, Note 8; Chapter 54, Note 1 Answer A 30 HTSUS 1704.90.25; HTSUS Chapter 17, Additional U.S. Note 11 Answer C 31 HTSUS 6904.10.0010 32 Answer B HTSUS 6113.00.1012; Chapter 59, Note 5; Chapter 61, Note 8 33 Answer D HTSUS 8711.60.0090 34 Answer B HTSUS 9403.60.8081; Chapter 94, Note 2 35 Answer C ACE Entry Summary Instructions v. 2.4a; HTSUS 6207.21.0030 36 Answer D HTSUS 8708.99.8180; GRI 1 37 Answer B HTSUS 8536.70.0000; Chapter 85, Note 9 38 Answer C HTSUS 8308.90.3000; Chapter 71, Note 9(a) 39 Answer B HTSUS 8481.80.9005; GRI 1 and 6; Section XVI, Note 3 40 Answer B GRI 1; General Notes 2 and 3; HTSUS 9606.21.4000; Chapter 96, Additional U.S. Note 2 41 Answer C 19 CFR 144.36; 19 CFR 144.32; 19 CFR 18.1 42 Answer A 19 CFR 144.33 43 Answer A 19 CFR 133.22(c)(3); 19 CFR 133.22(c)(1); 19 CFR 133.22(c)(4); 19 CFR 148.55 44 Answer C 19 CFR 146.25(a) 45 Answer C 19 CFR 190.181; 19 CFR 190.182; 19 CFR 146.44 46 Answer A 19 CFR 146.53(a)(3) 47 Answer B 19 CFR 142.15 48 Answer B 19 CFR 142.12(b); 19 CFR 182.31; 19 CFR 171.12(e) 49 Answer A 19 CFR Parts 141, 142, 159, 175; ACE BRPD Chapters 1 and 6 50 Answer A 19 CFR 24.36; 19 CFR 141.61(d)(3) 51 Answer A 19 CFR 142.2(a) 52 Answer A 19 CFR 141.69(b) 53 Answer D ACE BRPD Chapter 6, Section 6.2 54 Answer D 19 CFR 12.104g 55 Answer C 19 CFR 142.14(a); 142.11(a) 56 Answer D 19 CFR 143.21(a) 57 Answer D 19 CFR 174.11; 19 CFR 174.11(b)(8) 58 Answer B 19 CFR 113.37(a) 59 Answer C 19 CFR 113.63; 19 CFR 113.62; 19 CFR 113.64; 19 CFR 113.65 60 Answer A 19 CFR 113.26(a) 61 Answer C 19 CFR 134.43(a); 19 CFR 134.11; 19 CFR 134.1(b) 62 Answer D 19 CFR 102.21(a); 19 CFR 102.22(a); 19 CFR 102.22(b)(1)(i); 19 CFR 102.22(c)(1)(v); 19 CFR 102.22(d) 63 Answer D 19 CFR 102.1(g) 64 Answer B 19 CFR 12.11; 19 CFR 4.3; 19 CFR 12.91(b); 19 CFR 141.113 65 Answer C 19 CFR 12.118 66 Answer C 19 CFR 182.111(a) 67 Answer C Answer B HTSUS, GN 25(n)(iii)(A) 68 19 CFR 351.102(b)(40) Answer D 69 19 CFR 165.27(a) Answer D 70 19 CFR 165.13(a) Answer C 71 19 CFR 132.6; HTSUS, GN 3(b) Answer A 72 19 CFR 132.1(a) Answer D 73 HTSUS Chapter 18 Additional U.S. Note 2 Answer C 74 19 CFR 152.103(a)(2); 19 CFR 152.102(f) Answer C 75 HTSUS GN 3(b); HTSUS 7606.12.3035; HTSUS 9903.90.09; Chapter 99, Subchapter III, U.S. Note 30 76 Answer C Answer D 19 CFR 152.102(i); 19 CFR 152.102(h); 19 CFR 152.102(d) 77 19 CFR 152.103(b)(1); 19 CFR 152.102(a); 19 CFR 152.103(d) Answer B 78 19 CFR 152.102(g) Answer D 79 HTSUS GN 3(c)(i) Answer B 80 19 CFR 152.103(d)(2) 19 CFR 111.96 2 Answer C ACE BRPD Chapter 23, Section 23.6 and 23.10 3 Answer D 19 CFR 141.35 4 Answer C 19 CFR 141.34 5 Answer A 19 CFR 163.5(b) 6 Answer D 19 CFR 163.4(b)(3) 7 Answer B 19 CFR 111.17(a) 8 Answer A 19 CFR 111.3(b); 19 CFR 111.28(a) 9 Answer D 19 CFR 111.30(d)(4) 10 Answer A 19 CFR 111.19 11 Answer A 19 CFR 111.21(b) 12 Answer C 19 CFR 111.31(c) 13 Answer D 19 CFR 111.2; 19 CFR 111.11; 19 CFR 141.46; 19 CFR 143.1 14 Answer C 19 CFR 174.3(a) 15 Answer C 19 CFR 171, Apx C Section VI(D)(1) 16 Answer B 19 CFR 141.86(a)(10) 17 Answer B 19 CFR 18.8(a) 18 Answer D 19 CFR 111.29(b)(2) 19 Answer A 19 CFR 152.103(a)(4) 20 Answer C HTS 9903.88.15; 19 CFR 24.23; 19 CFR 24.24 21 Answer B 19 C.F.R. § 190.2, 190.31(c), 190.32(e) 22 Answer B 19 CFR 190.5 23 Answer B 19 CFR 190.62 24 Answer C 19 CFR 190.52(b) 25 Answer A 19 CFR 190.3(a)(1), 19 CFR 190.3(a)(2) 26 Answer D HTSUS 4412.33.5700; General Rule of Interpretation 1; Additional US Note 1(c) to Chapter 44 27 Answer A Harmonized Tariff Schedule of the United States-HTS SUB NOTE (1)(a) TO CHAPTER 64 28 Answer A 2023 HTSUS Basic Edition Chapter 64 Note 1(b) 29 Answer D HTS Chapter 94, Note 2 and 2(a), Heading 9401 30 Answer C 6811.82.0000 and GRI 1 31 Answer B 8531.80.1500 and GRI 1 32 Answer C GRIs 1 and 6, Chapter 85, Note 4 33 Answer C GRI 1; HTSUS 7308.30.5050 34 Answer C GRI 3(a); Heading 4201 35 Answer A HTS Chapter 30, Heading 3304, Chapter 35 Note 1 36 Answer B 2501.00.0000 37 Answer D 8507.60.0010, GRI 1 and GRI 6 38 Answer B Additional U.S. Rules of Interpretation 1(a) 39 Answer B General Statistical Notes, Note 6 40 Answer D General Statistical Note 3(a) 41 Answer C 19 C.F.R. § 113.11(b)(1)(ii) 42 Answer D ACE BRPD Chapter 3 43 Answer B 19 CFR 113.26(c) 44 Answer C 19 CFR 18.1(i)(2) 45 Answer B46 Answer A 19 CFR 158.23 47 Answer D 19 U.S.C. § 1557; 19 C.F.R. § 144.5 48 Answer D 19 CFR 133.23 49 Answer C 19 CFR 134.1(b) 50 Answer C 19 CFR 134.11; 19 CFR 134.46 51 Answer A 19 CFR 141.1 52 Answer C 19 CFR 122.91; 19 CFR 122.92 53 Answer C ACE Business Rule 6.4; ACE Business Rule 6.5 54 Answer A 19 CFR 24.24(a) 55 Answer B ACE BRPD Chapter 10 56 Answer B 19 CFR 12.32 57 Answer C Right to Make Entry Directive 3530-002A 58 Answer C 19 CFR 174.11 59 Answer B Business Rules and Process Document v 11 (Trade) Section 4.3 60 Answer B 19 CFR 24.3a; 19 CFR 24.23(c)(13); 19 CFR 24.24 61 Answer B 19 CFR 141.11 62 Answer A 19 CFR 141.5; ACE BRPD, Chapter 6; 19 CFR 174.12(e) 63 Answer B ACE ES Instructions v. 2-4 64 Answer C 19 CFR 123.10(b) 65 Answer A 19 CFR 12.48(a) 66 Answer B 19 CFR Part 351 67 Answer B 19 CFR 351.218(a) 68 Answer A 19 CFR 165.24 69 Answer B 19 CFR 152.103(a)(2) 70 Answer C 19 CFR 152.102(a)(1)(iv) 71 Answer A HTS 0904.21.2000 72 Answer A 19 CFR 152.108(c) 73 Answer B 19 CFR 152.103(a)(1) 74 Answer D 19 CFR 151.102 - 152.103 75 Answer C 19 CFR 152.3 76 Answer A Chapter 98, Subchapter II, U.S. Note 3 77 Answer D 19 CFR 152.103(a), 19 CFR 152.103(b) 78 Answer D 19 CFR 141.68, 19 CFR 132.11a 79 Answer B 19 CFR 182, Appendix A, Section 7 80 Answer D 19 CFR 132.5 (c) . Correct Answer Reference Citation(s) 1 Answer D 19 Code of Federal Regulations (CFR) 123.10 and 19 CFR 127.1 2 Answer B 19 CFR 142.11 3 Answer D Automated Commercial Environment (ACE) Business Rules and Process Document (BRPD) Section 1.14 4 Answer B 19 CFR 141.20 5 Answer A 19 CFR 18.1(j) 6 Answer C 19 CFR 19.11(d) 7 CREDIT TO ALL 19 CFR 18.6 and 19 CFR 141.113 8 Answer C 19 CFR 147 and ACE BRPD Chapter 18 9 Answer C 19 CFR 144.5 10 Answer C 19 CFR 159.1 11 Answer C ACE BRPD Chapter 21 12 Answer D 19 CFR 159.10 and 19 CFR Part 143, Subpart C 13 Answer D ACE BRPD Chapter 10 14 Answer D ACE BRPD Section 11.9 15 Answer B 19 CFR 141.34 16 Answer B 19 CFR 141.31(d) 17 Answer C 19 CFR 149.5(c) 18 Answer A 19 CFR 141.43 19 Answer D 19 CFR 113.13 and ACE BRPD Chapter 3 20 Answer B 19 CFR 111.13(c) 21 Answer B 19 CFR 113.26(a) 22 Answer A 19 CFR 113.62 23 Answer D 19 CFR 113.27(a) 24 Answer C 19 CFR 165.24(a) 25 Answer A 19 CFR 165.1 26 Answer D ACE BRPD Chapter 8 27 Answer C 19 CFR 111.2 28 Answer A 19 CFR 111.91(a) 29 Answer B 19 CFR 111.1 30 Answer B ACE BRPD Chapter 2 31 Answer B 19 CFR 111.28(d) 32 Answer C 19 CFR 111.45(a) 33 Answer A 19 CFR 111.28(c) 34 Answer C 19 CFR 111.41 35 Answer C Harmonized Tariff Schedule of the U.S. (HTSUS) 5111.19.1000 and 19 CFR 159.3 36 Answer C HTSUS Heading 7321 37 Answer D General Rules of Interpretation (GRI) 1 and HTSUS Chapter 69 Additional U.S. Note 3 and 5 38 CREDIT TO ALL GRI 1(c) 39 Answer B HTSUS 8521.90.0000; GRI 1; GRI 6 40 Answer D HTSUS 4407.13.0000 and HTSUS Chapter 44 Note 3 41 Answer C HTSUS 1701.14.1040 and HTSUS Chapter 17 Note 1 and 2 42 Answer D HTSUS Section XV, Note 5(a) and 7(a); GRI 1, GRI 3(b) 43 Answer A HTSUS General Statistical Notes, Note 4(d) 44 Answer B GRI 1; GRI 6; HTSUS Chapter 40 Note 1 45 Answer D GRI 1; GRI 6; HTSUS 8483.30.80 46 Answer C GRI 1; GRI 6; HTSUS 3105.20.0000 47 Answer B GRI 1 and HTSUS 8467.11.5090 48 Answer D HTSUS 6202.40.2020; HTSUS Chapter 62 Note 9 and Additional Note 2 49 Answer B 19 CFR 152.103(a) and (b) 50 Answer D ACE BRPD Chapter 8 51 Answer C 19 CFR 158.12 and HTSUS 9106.90.6500 52 Answer D 19 CFR 152.104(m) 53 Answer D 19 CFR 152.103(a) Example 3 54 Answer C 19 CFR 152.103(e) 55 Answer A HTSUS General Note 11(i) 56 Answer D HTSUS General Note 3(a)(v)(A) and HTSUS General Statistical Note 3(d) 57 Answer D HTSUS General Note 33 58 Answer B HTSUS General Note 3 59 Answer A 19 CFR 10.3001-10.3033 60 Answer D 19 CFR 102.21(c)(3)(ii) 61 Answer B 19 CFR 102.12 62 Answer D 19 CFR 134.47 and 19 CFR 134 Subpart D 63 Answer A 19 CFR 134.2 64 Answer B 19 CFR 162.73(a)(3)(i) 65 Answer D 19 CFR Part 171 66 Answer A 67 Answer D 19 CFR 133.27 19 CFR 171, Appendix C; 19 CFR 162.72; 19 CFR 163; 19 CFR 191.62 68 Answer B 19 CFR 161.5; 19 CFR 171.31; 19 CFR 172.31 69 Answer B 19 CFR 171.1 70 Answer C 19 CFR 133.21(b)(2)(i)(B) 71 Answer A 19 CFR 133.21(b)(2) 72 Answer C 19 CFR 12.42 73 Answer A 19 CFR 133.22(f) 74 Answer D 19 CFR 133.2(f) 75 Answer D 19 CFR 12.43(a) 76 Answer C 77 19 CFR 152.1(c); 19 CFR 159.03; 19 CFR 159.32 HTSUS Annex C, Schedule D 78 Answer B Answer B 79 HTSUS Chapter 48 and HTSUS Chapter 49 Note 3 Answer C ACE ES Instructions 2.4a 80 Answer A 19 CFR 141.86 Answer B 19 CFR 18.31(a), 19 CFR 19.12(d)(4)(ii), 19 CFR 142.3, 19 CFR 144.11, Chapter 24 of the BRPD 2 Answer E ACE BRPD Overview, Section 8.1, Chapter 13 3 Answer C ACE Entry Summary Instructions v.2.4 4 Answer A 19 CFR 144.5, 19 CFR 146.43, ACE BRPD Chapters 13 and 18 5 Answer B HTSUS Chapter 4 US Note 18, ACE BRPD Chapters 8 and 13 6 Answers A & B 19 CFR 19.8 and 19.11 7 Answer A 19 CFR 133.21(b)(2)(i)(B) 8 Answer E 19 CFR 10.101(d), 19 CFR 142.21 9 Answer B 19 CFR 134.32 10 Answer B 19 U.S.C 1526(f) and 19 CFR 133.27 11 Answer B 19 CFR 24.5, 19 CFR 134.52(a), 19 CFR 141.20, 19 CFR 141.61(d)(3), 19 CFR 148.62 12 Answer C 19 CFR 24.36(a)(1), 141.113(h), 162.74, 174.12(e), and 177.11(b)(2) 13 Answer E HTSUS, Heading 4202, Heading 4421 14 Answer E HTSUS 7306.69.7060, General Rule of Interpretation (GRI) 1, Chapter 72, Note 1(e) – Stainless steel Chapter 72, Note 1(f) – Other alloy steel 15 Answer A Harmonized Tariff Schedule of the United States/Chapter 84, General Rule of Interpretation 1, HTSUS, HTS Notes 6(D)(i) Chapter 84, HTS 8443.31.0000 16 Answer D Harmonized Tariff Schedule of the United States (HTSUS), Chapter 64, Note 4(a) and 4(b). Chapter 64, Subheading Note 1(a) and 1(b). Chapter 64, Additional U.S. Note 2 17 Answer E HTSUS, Section XI, Chapter 59 Note 2(a), HTSUS, Section XI, Chapter 59 Note 2(a)(1), HTSUS, Section XI, Chapter 59 Note 2(a)(4), HTSUS, Section XI, Chapter 59 Note 2(a)(6) 18 Answer E HTSUS Chapter 95 and Chapter 40 Note 2(f) 19 Answer B General Rule of Interpretation 1, Note 4 to Chapter 94. 20 Answer D GRI 1; Chapter 25 Note 1; Chapter 68, Additional U.S. Note 1 21 Answer D HTS 8528.72.6460, GRI 1, GRI 6 22 Answer D HTSUS, 2104.10.0020, Note 2 to Ch. 16, General Rule of Interpretation 1 (GRI 1). 23 Answer B HTSUS GRI 1 & 6, Chapter 31, Note 6, HTSUS 3105.10.0000 24 Answer C Section XI, Subheading Note 2(A), HTSUS, Section XI, Note 2(A), HTSUS, Chapter 61, HTSUS – Terms of the heading 6102, Chapter 62, HTSUS – Terms of the heading 6201/6202 25 Answer C HTSUS Headings 8711 and 8712 26 Answer D Business Rules and Process Document (Trade-External) ACE Entry Summary (Version 10.5) March 2021; Section 7.6 27 Answer B 19 CFR 143.2, 19 CFR 141.34, 19 CFR 113.62, 19 CFR 111 28 Answer A ACE Business Rules Chapter 5, 19 CFR 10.138 29 Answer A ACE Business Rules 1.5 and 7.2 30 Answer E 19 CFR 146.62; ACE BRPD Section 7.2; 19 CFR 159.11 31 Answer D 19 CFR 141.68(d) and 19 CFR 132.3 32 Answer E 19 CFR 135.05, ACE BRPD 8.8 33 Answer A US Note 35 to Sub-chapter XXII of Chapter 98; 19 CFR 132.5 34 Answer C ACE BRPD Chapters 7 and 8, Additional US Note 5 to Chapter 20 HTSUS, 19 CFR 141.64 35 Answer D 19 CFR 132.13 and ACE BRPD 8.8 36 Answer C 19 CFR 152.102(a), 19 CFR 152.103(b) and (d) 37 Answer D 19 CFR 152.102 and 152.103 38 Answer D 19 CFR 152.105 39 Answer A 19 CFR 152.102(a) 40 Answer E 19 CFR 152.102(g) 41 Answer B CFR 152.103 42 Answer D 19 CFR 12.26 43 Answer A 19 CFR 12.73, 19 CFR 12.74 and 19 CFR 12.80 44 Answer B 19 CFR 12.118 through 12.127 45 Answer D General Note 2 (GN 2) to the Harmonized Tariff Schedule of the United States (HTSUS). 46 Answer E 7.5 In-Eligible Changes of Chapter 7 to Business Rules and Process Documents ACE Entry Summary 47 Answer B ACE Entry Summary Business Process, 1.7 Data Changes, 1.17 Liquidated Damages, 1.14 Entry Summary Rejections, 20.1 Collection Scope, 48 Answer B 19 CFR 141.68 49 Answer D ACE Entry Summary Business Process Document v10.5, Chapter 9 50 Answer E ACE Entry Summary Instructions v. 2.4a, 19 CFR 115(c) 51 Answer D 19 CFR Appx to Part 102 52 Answer E GRIs 1 and 6 53 Answer B 19 CFR 12.44 54 Answer D 19 CFR 141.113(b) 55 Answer A 19 CFR 141.0a(i) 56 Answer C 19 CFR 177.11(b)(2) 57 Answer C 19 CFR 190.71(a) (TFTEA); 19 CFR 191.71(a) (CORE) 58 Answer B 19 CFR 190.31 and 19 CFR 190.172 (TFTEA) 59 Answer D 19 C.F.R. 190.53 (TFTEA) 60 Answer E 19 CFR 190.14 and 191.14 61 Answer B 19 CFR 190.51 and 191.51 Answer B 19 CFR Appendix C to Part 171 II.B.1. 62 63 Answer A 19 C.F.R. 111.21(c) 64 Answer D 19 CFR §111.29(a) 65 Answer C 19 CFR Appendix C to Part 171 VII.B 66 Answer E 19 CFR 111.30(d); 19 CFR 111.96(d) 67 Answer D 19 CFR 111.11(a)(4) 68 Answer D 19 CFR 111.13(b), 19 CFR 111.11(a)(2) 69 Answer D 19 CFR 111.29 70 Answer C General Note 4 footnote 1/ 71 Answer B HTSUS 6303.92.2010, General Note 29(a)(iii), General Note 29(b)(i), General Note 29(b)(ii), General Note 29(c)(i), General Note 29(m)(ii), General Note 29(n), Chapter 63.3, General Note 29(n), Chapter Rules 1 and 2 72 Answer D 19 CFR 10.84, 19 CFR 10.171, 19 CFR 10.183, 19 CFR 10.761 73 Answer B General Notes 7 and 17. 19 CFR 10.237 74 Answer A General Note 11(h)(iii) and 19 CFR 102.1(k) 75 Answer E 19 CFR 146.44(d), 19 CFR 146.1 76 Answer C 19 CFR 146.64 77 Answer D 19 CFR §19.36 (a),19 CFR §19.36 (b),19 CFR §19.36 (d),19 CFR §19.36 (g),19 CFR §19.42 78 Answer E 19 CFR 19.1(a)(11) and 19 CFR 19.1(c) 79 Answer D 19 CFR 146.41, 19 CFR 146.42, 19 CFR 146.43, 19 CFR 146.44, 19 CFR 146.1 80 Answer D 19 CFR 146.25
+"""
+
+# -----------------------------
+# CONFIG
+# -----------------------------
+DEFAULT_TOP_N = 50
+
+
+# -----------------------------
+# HELPERS
+# -----------------------------
+def normalize_whitespace(s: str) -> str:
+    s = s.replace("\u00a0", " ")
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
+def strip_trailing_punct(s: str) -> str:
+    return s.strip(" \t\r\n.;,:()[]{}")
+
+
+def htsus_rollup(code: str, level: str) -> str:
+    """
+    level:
+      '10' = keep as-is (up to 10-digit dotted forms)
+      '6'  = keep ####.## (6-digit)
+      '4'  = keep #### (heading)
+    """
+    code = code.strip()
+    if level == "10":
+        return code
+    if level == "6":
+        m = re.match(r"^(\d{4}\.\d{2})", code)
+        return m.group(1) if m else code
+    if level == "4":
+        m = re.match(r"^(\d{4})", code)
+        return m.group(1) if m else code
+    return code
+
+
+def read_text_from_args(path: str | None) -> str:
+    # 1) If a file path was provided, read it
+    if path:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+
+    # 2) If stdin is interactive (no pipe) and RAW_TEXT exists, use RAW_TEXT
+    try:
+        if sys.stdin.isatty() and "RAW_TEXT" in globals() and RAW_TEXT.strip():
+            return RAW_TEXT
+    except Exception:
+        pass
+
+    # 3) Otherwise, read from stdin (supports: type file.txt | python refcount.py)
+    return sys.stdin.read()
+
+
+# -----------------------------
+# EXTRACTORS 
+# -----------------------------
+CFR_PREFIX = r"(?:19\s*C\.?F\.?R\.?)"
+CFR_PREFIX_NORM = "19 CFR"
+
+RE_ANS = re.compile(r"\bAnswer\s+([A-E])\b", re.IGNORECASE)
+
+# CFR ranges like: "19 CFR 12.26 - 12.32" or "19 CFR 12.95 - 12.98"
+RE_CFR_RANGE = re.compile(
+    rf"\b{CFR_PREFIX}\s*(?:§\s*)?(?P<part>\d+)\.(?P<s1>\d+[a-z]?)\s*[-–]\s*(?P<part2>\d+)\.(?P<s2>\d+[a-z]?)\b",
+    re.IGNORECASE,
+)
+
+# CFR section: "19 CFR 111.45(a)(1)(ii)" or "19 CFR 141.0a(b)"
+# We intentionally stop at the base section, ignoring all parentheses
+RE_CFR_SECTION = re.compile(
+    rf"\b{CFR_PREFIX}\s*(?:§\s*)?(?P<part>\d+)\.(?P<section>\d+[a-z]?)\b",
+    re.IGNORECASE,
+)
+
+# CFR Part: "19 CFR Part 171"
+RE_CFR_PART = re.compile(
+    rf"\b{CFR_PREFIX}\s*Part\s+(?P<part>\d+)\b",
+    re.IGNORECASE,
+)
+
+# CFR Appendix: "19 CFR 171, Appendix C" or "19 CFR Appendix C to Part 171"
+RE_CFR_APPENDIX_1 = re.compile(
+    rf"\b{CFR_PREFIX}\s+(?P<part>\d+)\s*,?\s*(?:Appendix|Appx|Apx)\s+(?P<app>[A-Z])\b",
+    re.IGNORECASE,
+)
+RE_CFR_APPENDIX_2 = re.compile(
+    rf"\b{CFR_PREFIX}\s*(?:Appendix|Appx|Apx)\s+(?P<app>[A-Z])\s+to\s+Part\s+(?P<part>\d+)\b",
+    re.IGNORECASE,
+)
+
+# HTSUS/HTS codes ONLY when explicitly labeled HTS/HTSUS
+RE_HTSUS_CODE = re.compile(
+    r"\b(?:HTSUS|HTS)\s*(?P<code>\d{4}(?:\.\d{2}){1,3})\b",
+    re.IGNORECASE,
+)
+
+RE_HTSUS_CHAPTER = re.compile(r"\bHTSUS\s+Chapter\s+(?P<chap>\d+)\b", re.IGNORECASE)
+RE_HTSUS_SECTION = re.compile(r"\bHTSUS\s+Section\s+(?P<section>[IVXLC]+)\b", re.IGNORECASE)
+
+# Notes like: "HTSUS Chapter 69 Additional U.S. Note 3" / "Chapter 31, Note 5 HTSUS"
+RE_HTSUS_CHAP_NOTE = re.compile(
+    r"\b(?:HTSUS\s+Chapter\s+(?P<chap1>\d+)\s+(?P<kind1>Additional\s+U\.?S\.?\s+Note|U\.?S\.?\s+Note|Note)\s+(?P<note1>\d+))\b"
+    r"|"
+    r"\b(?:Chapter\s+(?P<chap2>\d+)\s*,?\s*(?P<kind2>Additional\s+U\.?S\.?\s+Note|U\.?S\.?\s+Note|Note)\s+(?P<note2>\d+)\s+HTSUS)\b",
+    re.IGNORECASE,
+)
+
+# GRI: counts "GRI 1", "GRI 2(a)", "GRIs 1 and 6" -> counts 1 and 6
+RE_GRI = re.compile(r"\bGRI(?:s)?\s+(?P<num>\d+)\b", re.IGNORECASE)
+
+# General Note / GN: counts base number only
+RE_GN = re.compile(r"\b(?:General\s+Note|GN)\s+(?P<num>\d+)\b", re.IGNORECASE)
+
+# Additional U.S. Rules of Interpretation
+RE_AUSR = re.compile(
+    r"\bAdditional\s+U\.?S\.?\s+Rules\s+of\s+Interpretation\s+(?P<num>\d+)\b",
+    re.IGNORECASE,
+)
+
+# General Statistical Note
+RE_GSN = re.compile(r"\bGeneral\s+Statistical\s+Note\s+(?P<num>\d+)\b", re.IGNORECASE)
+
+# ACE BRPD variants: keep Chapter or Section when present; otherwise just "ACE BRPD"
+RE_ACE_BRPD_CHAPTER = re.compile(
+    r"\bACE\b[^\n]{0,140}\bBRPD\b[^\n]{0,140}\bChapter\s+(?P<chap>\d+)\b",
+    re.IGNORECASE,
+)
+RE_ACE_BRPD_SECTION = re.compile(
+    r"\bACE\b[^\n]{0,140}\bBRPD\b[^\n]{0,140}\bSection\s+(?P<section>\d+(?:\.\d+)*)\b",
+    re.IGNORECASE,
+)
+RE_ACE_BRPD_GENERIC = re.compile(r"\bACE\b[^\n]{0,140}\bBRPD\b", re.IGNORECASE)
+
+# ACE Entry Summary Instructions (versioned)
+RE_ACE_ES_INSTR = re.compile(
+    r"\bACE\s+(?:Entry\s+Summary\s+)?Instructions\b[^\n]{0,80}?\bv\.?\s*(?P<ver>\d+(?:\.\d+)?[a-z]?)\b",
+    re.IGNORECASE,
+)
+
+# Some keys call it "Ace Entry Summary Instructions v. 2.4"
+RE_ACE_ES_INSTR_2 = re.compile(
+    r"\bAce\s+Entry\s+Summary\s+Instructions\b[^\n]{0,80}?\bv\.?\s*(?P<ver>\d+(?:\.\d+)?[a-z]?)\b",
+    re.IGNORECASE,
+)
+
+# Normalize “Business Rules and Process Document …” into ACE BRPD
+RE_BRPD_LONGFORM = re.compile(r"\bBusiness\s+Rules\s+and\s+Process\s+Document\b", re.IGNORECASE)
+
+
+def extract_all(text: str, *, htsus_level: str) -> tuple[Counter, dict[str, Counter]]:
+    """
+    Returns:
+      overall Counter (all normalized refs)
+      categorized counters: {"CFR": Counter, "HTSUS": Counter, ...}
+    """
+    overall = Counter()
+    cats = defaultdict(Counter)
+
+    # Pre-normalize a few common variants to reduce misses (light touch)
+    t = text
+    t = t.replace("19 Code of Federal Regulations (CFR)", "19 CFR")
+    t = t.replace("19 C.F.R.", "19 CFR")
+    t = t.replace("19 C.F.R", "19 CFR")
+    t = t.replace("§", "")
+    t = normalize_whitespace(t)
+
+    # 1) Expand CFR ranges first, and remove them from text to avoid double counting endpoints
+    def expand_range(m: re.Match) -> list[str]:
+        part = m.group("part")
+        part2 = m.group("part2")
+        s1 = m.group("s1")
+        s2 = m.group("s2")
+        if part != part2:
+            # different parts: count endpoints only (don’t expand)
+            return [f"{CFR_PREFIX_NORM} {part}.{s1}", f"{CFR_PREFIX_NORM} {part2}.{s2}"]
+
+        # expand only purely numeric sections (safe)
+        if not (s1[:-1].isdigit() if s1[-1].isalpha() else s1.isdigit()):
+            return [f"{CFR_PREFIX_NORM} {part}.{s1}", f"{CFR_PREFIX_NORM} {part2}.{s2}"]
+        if not (s2[:-1].isdigit() if s2[-1].isalpha() else s2.isdigit()):
+            return [f"{CFR_PREFIX_NORM} {part}.{s1}", f"{CFR_PREFIX_NORM} {part2}.{s2}"]
+
+        # if they include letters (like 0a), do not expand
+        if s1[-1].isalpha() or s2[-1].isalpha():
+            return [f"{CFR_PREFIX_NORM} {part}.{s1}", f"{CFR_PREFIX_NORM} {part}.{s2}"]
+
+        start = int(s1)
+        end = int(s2)
+        if end < start:
+            start, end = end, start
+        # cap expansion to avoid accidental huge ranges
+        if end - start > 200:
+            return [f"{CFR_PREFIX_NORM} {part}.{s1}", f"{CFR_PREFIX_NORM} {part}.{s2}"]
+
+        return [f"{CFR_PREFIX_NORM} {part}.{i}" for i in range(start, end + 1)]
+
+    ranges = []
+    for m in RE_CFR_RANGE.finditer(t):
+        ranges.extend(expand_range(m))
+    if ranges:
+        for r in ranges:
+            overall[r] += 1
+            cats["CFR"][r] += 1
+        t = RE_CFR_RANGE.sub(" ", t)
+        t = normalize_whitespace(t)
+
+    # 2) CFR Part
+    for m in RE_CFR_PART.finditer(t):
+        ref = f"{CFR_PREFIX_NORM} {m.group('part')}"
+        overall[ref] += 1
+        cats["CFR"][ref] += 1
+
+    # 3) CFR Appendix
+    for m in RE_CFR_APPENDIX_1.finditer(t):
+        ref = f"{CFR_PREFIX_NORM} {m.group('part')} Appendix {m.group('app').upper()}"
+        overall[ref] += 1
+        cats["CFR"][ref] += 1
+    for m in RE_CFR_APPENDIX_2.finditer(t):
+        ref = f"{CFR_PREFIX_NORM} {m.group('part')} Appendix {m.group('app').upper()}"
+        overall[ref] += 1
+        cats["CFR"][ref] += 1
+
+    # 4) CFR Sections (base section only, ignores (a)(1)... by design)
+    for m in RE_CFR_SECTION.finditer(t):
+        ref = f"{CFR_PREFIX_NORM} {m.group('part')}.{m.group('section')}"
+        overall[ref] += 1
+        cats["CFR"][ref] += 1
+
+    # 5) HTSUS labeled codes
+    for m in RE_HTSUS_CODE.finditer(t):
+        code = m.group("code")
+        ref = f"HTSUS {htsus_rollup(code, htsus_level)}"
+        overall[ref] += 1
+        cats["HTSUS"][ref] += 1
+
+    # 6) HTSUS Chapter / Section
+    for m in RE_HTSUS_CHAPTER.finditer(t):
+        ref = f"HTSUS Chapter {m.group('chap')}"
+        overall[ref] += 1
+        cats["HTSUS"][ref] += 1
+    for m in RE_HTSUS_SECTION.finditer(t):
+        ref = f"HTSUS Section {m.group('section').upper()}"
+        overall[ref] += 1
+        cats["HTSUS"][ref] += 1
+
+    # 7) HTSUS Chapter Note / Additional U.S. Note (counts as a single rolled-up key)
+    for m in RE_HTSUS_CHAP_NOTE.finditer(t):
+        chap = m.group("chap1") or m.group("chap2")
+        kind = (m.group("kind1") or m.group("kind2") or "").strip()
+        note = m.group("note1") or m.group("note2")
+        if chap and kind and note:
+            kind_clean = re.sub(r"\s+", " ", kind)
+            ref = f"HTSUS Chapter {chap} {kind_clean} {note}"
+            ref = normalize_whitespace(ref)
+            overall[ref] += 1
+            cats["HTSUS"][ref] += 1
+
+    # 8) GRI
+    for m in RE_GRI.finditer(t):
+        ref = f"GRI {m.group('num')}"
+        overall[ref] += 1
+        cats["GRI"][ref] += 1
+
+    # 9) General Notes / GN (base number)
+    for m in RE_GN.finditer(t):
+        ref = f"General Note {m.group('num')}"
+        overall[ref] += 1
+        cats["GN"][ref] += 1
+
+    # 10) Additional U.S. Rules of Interpretation
+    for m in RE_AUSR.finditer(t):
+        ref = f"Additional U.S. Rules of Interpretation {m.group('num')}"
+        overall[ref] += 1
+        cats["AUSR"][ref] += 1
+
+    # 11) General Statistical Note
+    for m in RE_GSN.finditer(t):
+        ref = f"General Statistical Note {m.group('num')}"
+        overall[ref] += 1
+        cats["GSN"][ref] += 1
+
+    # 12) ACE BRPD
+    # First normalize longform mentions to help generic capture
+    if RE_BRPD_LONGFORM.search(t):
+        t2 = RE_BRPD_LONGFORM.sub("BRPD", t)
+    else:
+        t2 = t
+
+    for m in RE_ACE_BRPD_CHAPTER.finditer(t2):
+        ref = f"ACE BRPD Chapter {m.group('chap')}"
+        overall[ref] += 1
+        cats["ACE"][ref] += 1
+
+    for m in RE_ACE_BRPD_SECTION.finditer(t2):
+        ref = f"ACE BRPD Section {m.group('section')}"
+        overall[ref] += 1
+        cats["ACE"][ref] += 1
+
+    # Generic ACE BRPD mentions (not chapter/section-specific)
+    for _ in RE_ACE_BRPD_GENERIC.finditer(t2):
+        ref = "ACE BRPD"
+        overall[ref] += 1
+        cats["ACE"][ref] += 1
+
+    # 13) ACE Entry Summary Instructions (versioned)
+    for m in RE_ACE_ES_INSTR.finditer(t2):
+        ref = f"ACE Entry Summary Instructions v{m.group('ver')}"
+        overall[ref] += 1
+        cats["ACE"][ref] += 1
+    for m in RE_ACE_ES_INSTR_2.finditer(t2):
+        ref = f"ACE Entry Summary Instructions v{m.group('ver')}"
+        overall[ref] += 1
+        cats["ACE"][ref] += 1
+
+    # Final cleanup: remove stray empties or bizarrely long keys
+    cleaned = Counter()
+    cleaned_cats = defaultdict(Counter)
+
+    for k, v in overall.items():
+        kk = strip_trailing_punct(normalize_whitespace(k))
+        if not kk:
+            continue
+        if len(kk) > 80:
+            continue
+        cleaned[kk] += v
+
+    for cat, ctr in cats.items():
+        for k, v in ctr.items():
+            kk = strip_trailing_punct(normalize_whitespace(k))
+            if not kk:
+                continue
+            if len(kk) > 80:
+                continue
+            cleaned_cats[cat][kk] += v
+
+    return cleaned, cleaned_cats
+
+
+def count_answers(text: str) -> Counter:
+    c = Counter()
+    for m in RE_ANS.finditer(text):
+        c[m.group(1).upper()] += 1
+    return c
+
+
+def print_top(counter: Counter, n: int, title: str) -> None:
+    print(f"\n{title}\n")
+    for ref, cnt in counter.most_common(n):
+        print(f"{ref} — {cnt}")
+
+
+def write_tsv(path: str, counter: Counter) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        for ref, cnt in counter.most_common():
+            f.write(f"{ref}\t{cnt}\n")
+
+
+# -----------------------------
+# MAIN
+# -----------------------------
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("file", nargs="?", help="Input text file. If omitted, reads from stdin.")
+    ap.add_argument("--top", type=int, default=DEFAULT_TOP_N, help="How many top refs to print (default 50).")
+    ap.add_argument(
+        "--htsus-rollup",
+        choices=["10", "6", "4"],
+        default="10",
+        help="HTSUS roll-up level: 10 (keep), 6 (####.##), 4 (####). Default 10.",
+    )
+    ap.add_argument(
+        "--out",
+        default="reference_counts.tsv",
+        help="Write full reference counts to this TSV file (default reference_counts.tsv).",
+    )
+    args = ap.parse_args()
+
+    raw = read_text_from_args(args.file)
+    if not raw.strip():
+        print("No input text found.")
+        return 2
+
+    ans = count_answers(raw)
+    refs, cats = extract_all(raw, htsus_level=args.htsus_rollup)
+
+    print_top(refs, args.top, f"TOP {args.top} MOST FREQUENT REFERENCES")
+    write_tsv(args.out, refs)
+
+    print("\nANSWER LETTER COUNTS\n")
+    for k in ["A", "B", "C", "D", "E"]:
+        if ans.get(k, 0):
+            print(f"Answer {k} — {ans.get(k, 0)}")
+
+    # Optional category breakdowns (kept short)
+    for cat in ["CFR", "HTSUS", "GRI", "GN", "AUSR", "GSN", "ACE"]:
+        if cat in cats and cats[cat]:
+            print_top(cats[cat], min(15, args.top), f"TOP {min(15, args.top)} IN CATEGORY: {cat}")
+
+    print(f"\nSaved full reference counts to: {args.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
